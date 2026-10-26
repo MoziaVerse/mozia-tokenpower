@@ -15,8 +15,8 @@ file, resolved Compose configuration, API keys, or bootstrap credentials.
 Run from this directory:
 
 ```sh
-docker compose --env-file /opt/mozia/secrets/stack.env ps
-docker compose --env-file /opt/mozia/secrets/stack.env up -d --no-build
+docker compose --env-file /opt/mozia/secrets/stack.env -f compose.yaml -f /opt/mozia/secrets/images.override.json ps
+docker compose --env-file /opt/mozia/secrets/stack.env -f compose.yaml -f /opt/mozia/secrets/images.override.json up -d --no-build
 ```
 
 Images use the source commit as their tag and an OCI revision label. New API's
@@ -114,3 +114,66 @@ Copy backups to separate storage for protection against loss of this VPS.
 Backups and secrets must never enter Git. Redis is operational cache/state;
 application-owned files live in the named data volumes and should also be
 included in a full disaster-recovery backup.
+
+## Automatic deployment
+
+Pushes to `mozia` in `MoziaVerse/mozia-tokenpower` and `MoziaVerse/mozia-sub2api`
+run each repository's `mozia-deploy.yml`. `main` continues tracking upstream and
+never deploys. Each workflow builds natively on `ubuntu-24.04-arm`, publishes a
+commit-tagged GHCR image, and sends its immutable digest to the server. Third-party
+actions are pinned to full commit hashes. The `production` environment accepts
+only the `mozia` branch.
+
+Environment configuration in **each** repository:
+
+- Variable `MOZIA_DEPLOY_HOST`: the target server address.
+- Secret `MOZIA_DEPLOY_SSH_KEY`: that service's dedicated private key.
+- Secret `MOZIA_DEPLOY_KNOWN_HOSTS`: the host key verified over the existing SSH connection.
+
+No database passwords, application API keys, or personal SSH keys are stored in
+GitHub. Registry authentication uses the workflow's short-lived `GITHUB_TOKEN`;
+the server removes the temporary Docker credential directory after the pull.
+
+The reviewed receiver is installed root-owned, mode 0755, at
+`/opt/mozia/tools/deploy-gateway.py`. Two separate root `authorized_keys` entries
+use `restrict,command="/opt/mozia/tools/deploy-gateway.py tokenpower"` and
+`restrict,command="/opt/mozia/tools/deploy-gateway.py sub2api"`. The receiver permits
+only `status` or `deploy <SHA>`, with the repository and service fixed by the key.
+Receiver changes require an explicit installation; repository pushes cannot
+replace the installed receiver.
+
+The receiver serializes both applications with a shared lock, rejects dirty or
+diverged server checkouts, and skips commits superseded on `mozia`. It verifies
+image architecture and source revision, creates and checks a PostgreSQL dump,
+then replaces only the selected application container. Docker health, the actual
+running image ID, and New API's internal connection to Sub2API are checked before
+recording success and fast-forwarding the server checkout. Database, Redis and
+Caddy containers are not restarted by this application deployment.
+
+The current image references are stored outside Git in
+`/opt/mozia/secrets/images.override.json`. Include that file in manual Compose
+operations as shown above; using only the original `stack.env` can select older
+bootstrap images. The existing directory `/opt/mozia/mozia-newapi` is retained,
+with `origin` now pointing to `MoziaVerse/mozia-tokenpower`.
+
+A failed startup or health check triggers an attempt to restart the previous
+application image by its local image ID, using the pre-deployment Compose snapshot.
+This is an **application rollback**, not a database rollback: migrations may affect
+backward compatibility, and a failed recovery requires operator intervention.
+No automated process overwrites live data with a backup. Deployment backups and
+results live under `/opt/mozia/backups/<UTC timestamp>-<service>-<commit>/`.
+Resolved Compose snapshots contain secrets and are root-only; never publish them.
+
+Inspect the Actions run and its deployment output for success or failure. Re-run
+failed jobs after addressing their cause; an older run will skip deployment once
+`mozia` has advanced. To pause automatic deployment, disable the `Deploy Mozia`
+workflow in that repository. For manual recovery, inspect the retained backup and
+its `previous-compose.json`, then (as root) run `docker compose -p mozia -f
+<previous-compose.json> up -d --no-deps --no-build --pull never --wait <service>`.
+After recovery, update the corresponding image in `images.override.json` to the
+verified running image before further manual Compose operations.
+
+Do not delete the current or previous deployment images during disk cleanup.
+Backups have no automatic deletion policy; monitor server disk usage. Deployments
+stop before switching containers if free space is below 2 GiB. Application settings
+and credentials stay in the existing PostgreSQL databases and server secret files.

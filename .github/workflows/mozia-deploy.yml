@@ -1,0 +1,76 @@
+name: Deploy Mozia tokenpower
+
+on:
+  push:
+    branches: [mozia]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: production-tokenpower
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: github.repository == 'MoziaVerse/mozia-tokenpower' && github.ref == 'refs/heads/mozia'
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    environment:
+      name: production
+      url: https://tokenpower.link
+    steps:
+      - name: Check out the exact deployment commit
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Verify deployment safety checks
+        run: python3 -B -m unittest discover -s deploy/mozia -p 'test_*.py' -v
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@c99871dec2022cc055c062a10cc1a1310835ceb4 # v4.3.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and publish ARM64 image
+        id: image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          platforms: linux/arm64
+          push: true
+          tags: ghcr.io/moziaverse/mozia-tokenpower:${{ github.sha }}
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=https://github.com/MoziaVerse/mozia-tokenpower
+          build-args: |
+            VERSION=${{ github.sha }}
+          cache-from: type=gha,scope=tokenpower-arm64
+          cache-to: type=gha,scope=tokenpower-arm64,mode=max
+      - name: Deploy exact image digest and verify health
+        env:
+          DEPLOY_HOST: ${{ vars.MOZIA_DEPLOY_HOST }}
+          DEPLOY_KEY: ${{ secrets.MOZIA_DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.MOZIA_DEPLOY_KNOWN_HOSTS }}
+          IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          printf '%s\n' "$DEPLOY_KEY" > "$RUNNER_TEMP/mozia-deploy-key"
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$RUNNER_TEMP/mozia-known-hosts"
+          trap 'rm -f "$RUNNER_TEMP/mozia-deploy-key" "$RUNNER_TEMP/mozia-known-hosts"' EXIT
+          python3 -c 'import json,os; print(json.dumps({"digest":os.environ["IMAGE_DIGEST"], "username":os.environ["GITHUB_ACTOR"], "token":os.environ["REGISTRY_TOKEN"]}))' |
+            ssh -T -i "$RUNNER_TEMP/mozia-deploy-key" \
+              -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+              -o UserKnownHostsFile="$RUNNER_TEMP/mozia-known-hosts" \
+              -o ConnectTimeout=20 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 \
+              "root@$DEPLOY_HOST" "deploy $GITHUB_SHA"
+      - name: Record the deployed revision
+        run: |
+          printf 'Deployed `%s` to https://tokenpower.link\n' "$GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"

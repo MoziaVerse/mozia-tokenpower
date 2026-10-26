@@ -38,8 +38,8 @@ it before it runs out. Keep upstream accounts assigned to the corresponding
 groups. Public registration stays disabled. The service user's login and keys
 are stored in `/opt/mozia/secrets/newapi-upstream.json` (root, mode 0600), outside
 Git. The previous administrator-owned integration keys are retired after the
-new credentials pass verification. Its management port is loopback-only, as is
-New API until HTTPS is configured.
+new credentials pass verification. Application ports remain bound to loopback;
+Caddy publishes the two HTTPS domains on ports 80 and 443.
 
 The public brand is configured through New API's native `SystemName=TokenPower`
 and `Logo=/tokenpower-logo-v3.png` settings. The generated transparent logo is
@@ -51,13 +51,30 @@ password is in the protected `newapi-upstream.json` file above.
 ssh -N -L 13000:127.0.0.1:3000 -L 18080:127.0.0.1:8080 qiniu-sg
 ```
 
-Open `http://localhost:13000` (New API) or `http://localhost:18080` (Sub2API).
-After a domain resolves to this VPS, set `NEWAPI_DOMAIN`,
-`NEWAPI_ORIGIN=https://<domain>` and `HTTPS_ENABLED=true` in the secret env file,
-then use `docker compose --env-file /opt/mozia/secrets/stack.env --profile https up -d`.
-Caddy obtains the certificate and forwards streaming responses without buffering.
-Sub2API stays private and uses `http://sub2api:8080` as the New API channel base URL.
-Use distinct channel credentials for OpenAI and Anthropic groups.
+The local ports are available for diagnostics. Use the HTTPS domains for normal
+sign-in, since New API session cookies are now marked Secure.
+The public sites are `https://tokenpower.link` (New API) and
+`https://sub.tokenpower.link` (Sub2API login and authenticated administration).
+Runtime values are `NEWAPI_DOMAIN=tokenpower.link`,
+`NEWAPI_ORIGIN=https://tokenpower.link`, `SUB2API_DOMAIN=sub.tokenpower.link`,
+`SUB2API_ORIGIN=https://sub.tokenpower.link`, and `HTTPS_ENABLED=true`.
+Start with `docker compose --env-file /opt/mozia/secrets/stack.env --profile https up -d --no-build`.
+Caddy obtains and renews certificates using HTTP-01 and forwards streaming
+responses without buffering. Port 80 must remain reachable for renewal.
+Cloudflare DNS records must point at this VPS and its SSL mode must be Full (strict).
+The trusted proxy ranges in Caddyfile must follow Cloudflare's published ranges.
+
+New API's `ServerAddress` and Sub2API's `frontend_url` match their HTTPS origins.
+Sub2API's `registration_enabled=false` and
+`dingtalk_connect_bypass_registration=false` disable self-registration on the
+server; Caddy redirects its home and registration pages to `/login`.
+New API uses `http://sub2api:8080` internally, with distinct channel credentials
+for OpenAI and Anthropic groups.
+
+New API's `USDExchangeRate=7` and `Price=7` set the CNY display conversion and
+the base CNY top-up price respectively. Sub2API's dormant subscription CNY
+conversion is also 7; its payments remain disabled. Balances remain USD units;
+these settings do not revalue existing balances or change model prices.
 
 Import authorized upstream accounts in Sub2API before enabling customer traffic.
 Verify each channel and its intended models and prices before accepting payment.

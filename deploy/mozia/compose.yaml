@@ -65,6 +65,8 @@ services:
       SERVER_HOST: 0.0.0.0
       SERVER_PORT: "8080"
       SERVER_MODE: release
+      SERVER_FRONTEND_URL: ${SUB2API_ORIGIN:-}
+      SERVER_TRUSTED_PROXIES: 10.89.0.0/24
       RUN_MODE: standard
       DATABASE_HOST: sub2api-postgres
       DATABASE_PORT: "5432"
@@ -159,6 +161,7 @@ services:
     ports: ["80:80", "443:443"]
     environment:
       NEWAPI_DOMAIN: ${NEWAPI_DOMAIN:-localhost}
+      SUB2API_DOMAIN: ${SUB2API_DOMAIN:-sub.localhost}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data

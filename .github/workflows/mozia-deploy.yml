@@ -52,6 +52,7 @@ jobs:
           cache-from: type=gha,scope=tokenpower-arm64
           cache-to: type=gha,scope=tokenpower-arm64,mode=max
       - name: Deploy exact image digest and verify health
+        id: deploy
         env:
           DEPLOY_HOST: ${{ vars.MOZIA_DEPLOY_HOST }}
           DEPLOY_KEY: ${{ secrets.MOZIA_DEPLOY_SSH_KEY }}
@@ -70,7 +71,13 @@ jobs:
               -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
               -o UserKnownHostsFile="$RUNNER_TEMP/mozia-known-hosts" \
               -o ConnectTimeout=20 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 \
-              "root@$DEPLOY_HOST" "deploy $GITHUB_SHA"
+              "root@$DEPLOY_HOST" "deploy $GITHUB_SHA" | tee "$RUNNER_TEMP/mozia-deployment.log"
+          if grep -q '^Deployed ' "$RUNNER_TEMP/mozia-deployment.log"; then
+            echo "deployed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "deployed=false" >> "$GITHUB_OUTPUT"
+          fi
       - name: Record the deployed revision
+        if: steps.deploy.outputs.deployed == 'true'
         run: |
           printf 'Deployed `%s` to https://tokenpower.link\n' "$GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"

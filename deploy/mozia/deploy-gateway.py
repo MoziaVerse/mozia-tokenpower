@@ -179,11 +179,12 @@ def deploy(key, revision, payload):
         pins = {'services': {name: {'image': data['Config']['Image']}
                              for name, data in current.items()}}
         pins['services'][service]['image'] = image
-        atomic_json(PINS, pins)
         atomic_json(backup / 'result.json', {
-            'status': 'success', 'service': key, 'revision': revision, 'image': image,
+            'status': 'verified', 'service': key, 'revision': revision, 'image': image,
             'previous_image': previous['Image'], 'backup': str(backup),
         })
+        # Commit the image pins last: a failed result write must leave old pins intact.
+        atomic_json(PINS, pins)
         emit(f'Deployed {key} {revision}; container healthy and internal upstream reachable.')
     except BaseException:
         if switched:

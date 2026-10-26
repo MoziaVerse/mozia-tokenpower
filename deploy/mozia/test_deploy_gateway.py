@@ -29,7 +29,7 @@ class DeploymentSafetyTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             deploy.validate_payload({'digest': DIGEST, 'username': '-u other', 'token': 'x'})
 
-    def exercise_deployment(self, *, revision_label=SHA, backup_status=0, health_failure=False):
+    def exercise_deployment(self, *, revision_label=SHA, backup_status=0, health_failure=False, record_failure=False):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / 'backups').mkdir()
@@ -61,6 +61,12 @@ class DeploymentSafetyTests(unittest.TestCase):
                 return SimpleNamespace(returncode=backup_status)
 
             starts = []
+            write_json = deploy.atomic_json
+
+            def record(path, value):
+                if record_failure and path.name == 'result.json':
+                    raise OSError('simulated full filesystem')
+                write_json(path, value)
 
             def start(config, service):
                 starts.append((json.loads(Path(config).read_text())['services'][service]['image'], service))
@@ -71,13 +77,14 @@ class DeploymentSafetyTests(unittest.TestCase):
                     patch.object(deploy.subprocess, 'run', side_effect=dump), \
                     patch.object(deploy.shutil, 'disk_usage', return_value=SimpleNamespace(free=10 * 1024**3)), \
                     patch.object(deploy, 'emit'), \
+                    patch.object(deploy, 'atomic_json', side_effect=record), \
                     patch.object(deploy, 'start_service', side_effect=start), \
                     patch.object(deploy, 'check_health', side_effect=[RuntimeError('unhealthy'), None]
                                  if health_failure else None):
                 error = None
                 try:
                     deploy.deploy('tokenpower', SHA, {'digest': DIGEST, 'username': 'user', 'token': 'ephemeral'})
-                except RuntimeError as failure:
+                except Exception as failure:
                     error = failure
                 pins = json.loads(deploy.PINS.read_text()) if deploy.PINS.exists() else None
                 return starts, error, pins
@@ -108,6 +115,12 @@ class DeploymentSafetyTests(unittest.TestCase):
         self.assertEqual(pins['services']['sub2api']['image'], 'old/sub2api')
         self.assertEqual(pins['services']['newapi']['image'],
                          'ghcr.io/moziaverse/mozia-tokenpower@' + DIGEST)
+
+    def test_result_write_failure_restores_image_without_committing_new_pins(self):
+        starts, error, pins = self.exercise_deployment(record_failure=True)
+        self.assertIsInstance(error, OSError)
+        self.assertEqual(starts[-1], ('sha256:old-newapi', 'newapi'))
+        self.assertIsNone(pins)
 
 
 if __name__ == '__main__':

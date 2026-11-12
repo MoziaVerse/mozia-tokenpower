@@ -14,7 +14,7 @@ services:
     image: ${NEWAPI_IMAGE:?Set the image built from the mozia commit}
     build:
       context: ../..
-      platforms: [linux/arm64]
+      platforms: [linux/amd64]
       args:
         VERSION: ${NEWAPI_REVISION:?required}
       labels:
@@ -51,7 +51,7 @@ services:
     image: ${SUB2API_IMAGE:?Set the image built from the mozia commit}
     build:
       context: ../../../mozia-sub2api
-      platforms: [linux/arm64]
+      platforms: [linux/amd64]
       args:
         GOPROXY: https://proxy.golang.org,direct
         GOSUMDB: sum.golang.org

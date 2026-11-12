@@ -126,7 +126,7 @@ def deploy(key, revision, payload):
         run(docker + ['pull', image], timeout=900)
     payload.clear()
     built = inspect(image, 'image')
-    if (built['Architecture'] != 'arm64' or built['Os'] != 'linux' or
+    if (built['Architecture'] != 'amd64' or built['Os'] != 'linux' or
             built['Config'].get('Labels', {}).get('org.opencontainers.image.revision') != revision):
         raise RuntimeError('Image architecture or revision label did not match')
 

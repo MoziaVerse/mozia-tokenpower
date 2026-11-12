@@ -40,7 +40,7 @@ class DeploymentSafetyTests(unittest.TestCase):
 
             def inspect(name, kind='container'):
                 if kind == 'image':
-                    return {'Id': 'sha256:new', 'Architecture': 'arm64', 'Os': 'linux',
+                    return {'Id': 'sha256:new', 'Architecture': 'amd64', 'Os': 'linux',
                             'Config': {'Labels': {'org.opencontainers.image.revision': revision_label}}}
                 return old['newapi' if name == 'mozia-newapi-1' else 'sub2api']
 

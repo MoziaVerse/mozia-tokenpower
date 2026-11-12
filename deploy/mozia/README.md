@@ -22,7 +22,7 @@ docker compose --env-file /opt/mozia/secrets/stack.env -f compose.yaml -f /opt/m
 Images use the source commit as their tag and an OCI revision label. New API's
 `VERSION` build argument also records the commit in its UI/API version field;
 the upstream repository's `VERSION` file is empty outside release builds. Builds
-target `linux/arm64`. Build the applications sequentially on the 2-core VPS.
+target `linux/amd64`; production uses the shared-IP SSH port 10046.
 PostgreSQL 18 and Redis are separate for each service, with persistent volumes
 and private data networks. No database or Redis port is published.
 
@@ -48,7 +48,7 @@ The service user's login email is `mozia-tokenpower@example.com`; its generated
 password is in the protected `newapi-upstream.json` file above.
 
 ```sh
-ssh -N -L 13000:127.0.0.1:3000 -L 18080:127.0.0.1:8080 qiniu-sg
+ssh -N -L 13000:127.0.0.1:3000 -L 18080:127.0.0.1:8080 qiniu-sg2
 ```
 
 The local ports are available for diagnostics. Use the HTTPS domains for normal
@@ -119,14 +119,16 @@ included in a full disaster-recovery backup.
 
 Pushes to `mozia` in `MoziaVerse/mozia-tokenpower` and `MoziaVerse/mozia-sub2api`
 run each repository's `mozia-deploy.yml`. `main` continues tracking upstream and
-never deploys. Each workflow builds natively on `ubuntu-24.04-arm`, publishes a
-commit-tagged GHCR image, and sends its immutable digest to the server. Third-party
+never deploys. Each workflow builds natively on `ubuntu-latest`, publishes a
+commit-tagged AMD64 GHCR image, and sends its immutable digest to the server over
+port 10046. Third-party
 actions are pinned to full commit hashes. The `production` environment accepts
 only the `mozia` branch.
 
 Environment configuration in **each** repository:
 
-- Variable `MOZIA_DEPLOY_HOST`: the target server address.
+- Variable `MOZIA_DEPLOY_HOST`: the target server address (`204.141.229.200`).
+- The workflow hard-codes the shared-IP SSH port (`10046`).
 - Secret `MOZIA_DEPLOY_SSH_KEY`: that service's dedicated private key.
 - Secret `MOZIA_DEPLOY_KNOWN_HOSTS`: the host key verified over the existing SSH connection.
 

@@ -1,0 +1,85 @@
+name: Mozia test deployment
+
+on:
+  push:
+    branches: [mozia]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    # Preserved legacy test deployment; production has mozia-deploy.yml.
+    if: github.repository == 'MoziaVerse/mozia-newapi'
+    uses: ./.github/workflows/ci.yml
+
+  deploy:
+    needs: verify
+    if: github.repository == 'MoziaVerse/mozia-newapi'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: test
+    concurrency:
+      group: mozia-newapi-test
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+      - name: Verify deployment guards
+        run: python3 -m unittest discover -s deploy -p '*_test.py'
+      - name: Check candidate
+        id: candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          current=$(gh api repos/MoziaVerse/mozia-newapi/git/ref/heads/mozia --jq .object.sha)
+          if [ "$current" = "$GITHUB_SHA" ]; then
+            echo 'current=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'A newer mozia commit exists; skipped.'
+          fi
+      - name: Set image version
+        if: steps.candidate.outputs.current == 'true'
+        run: printf 'git-%.12s\n' "$GITHUB_SHA" > VERSION
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c
+        if: steps.candidate.outputs.current == 'true'
+      - name: Build verified image
+        if: steps.candidate.outputs.current == 'true'
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          tags: mozia-newapi:${{ github.sha }}
+          labels: org.opencontainers.image.revision=${{ github.sha }}
+          cache-from: type=gha,scope=mozia-newapi-test
+          cache-to: type=gha,scope=mozia-newapi-test,mode=max
+      - name: Configure test-server SSH
+        if: steps.candidate.outputs.current == 'true'
+        env:
+          DEPLOY_KEY: ${{ secrets.TEST_SSH_PRIVATE_KEY }}
+          KNOWN_HOSTS: ${{ secrets.TEST_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          test -n "$DEPLOY_KEY" && test -n "$KNOWN_HOSTS"
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/mozia_test
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/mozia_test ~/.ssh/known_hosts
+      - name: Transfer and deploy application image
+        if: steps.candidate.outputs.current == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          current=$(gh api repos/MoziaVerse/mozia-newapi/git/ref/heads/mozia --jq .object.sha)
+          if [ "$current" != "$GITHUB_SHA" ]; then
+            echo 'Candidate changed during build; skipped.'
+            exit 0
+          fi
+          ssh_opts=(-o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -i ~/.ssh/mozia_test)
+          docker save "mozia-newapi:$GITHUB_SHA" | gzip -1 | ssh "${ssh_opts[@]}" server@116.136.189.10 'bash -o pipefail -c "gzip -d | docker load"'
+          ssh "${ssh_opts[@]}" server@116.136.189.10 "python3 - '$GITHUB_SHA' '$GITHUB_RUN_ID'" < deploy/test.py
+      - name: Remove temporary SSH key
+        if: always()
+        run: rm -f ~/.ssh/mozia_test

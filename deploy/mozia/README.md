@@ -5,7 +5,7 @@ New API (upstream: QuantumNous/new-api) is the customer gateway; Sub2API
 Both applications run code built from their respective `mozia` branches.
 `main` tracks the original upstream and contains no deployment customizations.
 
-The sibling server checkouts are `/opt/mozia/mozia-newapi` and
+The sibling server checkouts are `/opt/mozia/mozia-tokenpower` and
 `/opt/mozia/mozia-sub2api`. Runtime secrets are outside Git, in
 `/opt/mozia/secrets/stack.env` (root, mode 0600). Do not commit or print this
 file, resolved Compose configuration, API keys, or bootstrap credentials.
@@ -155,8 +155,15 @@ Caddy containers are not restarted by this application deployment.
 The current image references are stored outside Git in
 `/opt/mozia/secrets/images.override.json`. Include that file in manual Compose
 operations as shown above; using only the original `stack.env` can select older
-bootstrap images. The existing directory `/opt/mozia/mozia-newapi` is retained,
-with `origin` now pointing to `MoziaVerse/mozia-tokenpower`.
+bootstrap images. The checkout is `/opt/mozia/mozia-tokenpower`, with `origin`
+pointing to `MoziaVerse/mozia-tokenpower`. The application container is explicitly
+named `mozia-tokenpower-1`; the Compose service remains `newapi`. Keep existing
+`mozia_newapi-*` data volumes, database/Redis containers, internal DNS and image-pin
+keys unchanged: this deployment naming change does not migrate application data.
+
+The imported `mozia-test.yml` workflow and `deploy/test*.py` preserve the separate
+legacy test deployment. Both workflow jobs are restricted to
+`MoziaVerse/mozia-newapi`; they do not deploy or run on this production fork.
 
 A failed startup or health check triggers an attempt to restart the previous
 application image by its local image ID, using the pre-deployment Compose snapshot.

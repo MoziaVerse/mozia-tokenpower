@@ -21,12 +21,13 @@ import tempfile
 import time
 
 ROOT = Path('/opt/mozia')
-STACK = ROOT / 'mozia-newapi/deploy/mozia/compose.yaml'
+STACK = ROOT / 'mozia-tokenpower/deploy/mozia/compose.yaml'
 PINS = ROOT / 'secrets/images.override.json'
 SERVICES = {
-    'tokenpower': ('newapi', 'mozia-newapi', 'mozia-tokenpower'),
+    'tokenpower': ('newapi', 'mozia-tokenpower', 'mozia-tokenpower'),
     'sub2api': ('sub2api', 'mozia-sub2api', 'mozia-sub2api'),
 }
+CONTAINERS = {'newapi': 'mozia-tokenpower-1', 'sub2api': 'mozia-sub2api-1'}
 
 
 def run(args, *, timeout=180, **kwargs):
@@ -85,12 +86,12 @@ def start_service(config, service):
 
 
 def check_health(service, expected_image):
-    current = inspect(f'mozia-{service}-1')
+    current = inspect(CONTAINERS[service])
     if (current['Image'] != expected_image or
             current['State'].get('Health', {}).get('Status') != 'healthy'):
         raise RuntimeError('Running image or container health did not match')
     # Verify the gateway can still reach its upstream on the internal network.
-    run(['docker', 'exec', 'mozia-newapi-1', 'wget', '-q', '-T', '10', '-O',
+    run(['docker', 'exec', CONTAINERS['newapi'], 'wget', '-q', '-T', '10', '-O',
          '/dev/null', 'http://sub2api:8080/health'], timeout=20)
 
 
@@ -130,7 +131,7 @@ def deploy(key, revision, payload):
             built['Config'].get('Labels', {}).get('org.opencontainers.image.revision') != revision):
         raise RuntimeError('Image architecture or revision label did not match')
 
-    current = {name: inspect(f'mozia-{name}-1') for name in ('newapi', 'sub2api')}
+    current = {name: inspect(container) for name, container in CONTAINERS.items()}
     previous = current[service]
     # Use Docker image IDs for rollback; a mutable tag can never select a newer image.
     source = ['docker', 'compose', '--env-file', str(ROOT / 'secrets/stack.env'), '-f', str(STACK)]
@@ -206,7 +207,7 @@ def main():
     action, revision = parse_command(os.environ.get('SSH_ORIGINAL_COMMAND', ''))
     if action == 'status':
         service = SERVICES[key][0]
-        container = inspect(f'mozia-{service}-1')
+        container = inspect(CONTAINERS[service])
         emit(json.dumps({'service': key, 'image': container['Config']['Image'],
                          'health': container['State'].get('Health', {}).get('Status')}))
         return

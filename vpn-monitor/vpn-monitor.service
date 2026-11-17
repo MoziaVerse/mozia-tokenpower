@@ -1,0 +1,15 @@
+[Unit]
+Description=Halo UniVPN monitor with Feishu alerts
+After=network-online.target halo-univpn.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+EnvironmentFile=/opt/mozia/secrets/vpn-monitor.env
+ExecStart=/usr/bin/python3 /opt/mozia/mozia-tokenpower/vpn-monitor/vpn_monitor.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

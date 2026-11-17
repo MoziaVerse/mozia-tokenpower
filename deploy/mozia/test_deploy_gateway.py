@@ -29,7 +29,7 @@ class DeploymentSafetyTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             deploy.validate_payload({'digest': DIGEST, 'username': '-u other', 'token': 'x'})
 
-    def exercise_deployment(self, *, revision_label=SHA, backup_status=0, health_failure=False, record_failure=False):
+    def exercise_deployment(self, *, key='tokenpower', revision_label=SHA, backup_status=0, health_failure=False, record_failure=False):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / 'backups').mkdir()
@@ -42,10 +42,11 @@ class DeploymentSafetyTests(unittest.TestCase):
                 if kind == 'image':
                     return {'Id': 'sha256:new', 'Architecture': 'amd64', 'Os': 'linux',
                             'Config': {'Labels': {'org.opencontainers.image.revision': revision_label}}}
-                return old['newapi' if name == 'mozia-newapi-1' else 'sub2api']
+                return {'mozia-tokenpower-1': old['newapi'], 'mozia-sub2api-1': old['sub2api']}[name]
 
             def run(args, **kwargs):
                 if args[0] == 'git':
+                    self.assertEqual(args[2], str(root / ('mozia-tokenpower' if key == 'tokenpower' else 'mozia-sub2api')))
                     if 'branch' in args:
                         return b'mozia'
                     if 'rev-parse' in args:
@@ -83,7 +84,7 @@ class DeploymentSafetyTests(unittest.TestCase):
                                  if health_failure else None):
                 error = None
                 try:
-                    deploy.deploy('tokenpower', SHA, {'digest': DIGEST, 'username': 'user', 'token': 'ephemeral'})
+                    deploy.deploy(key, SHA, {'digest': DIGEST, 'username': 'user', 'token': 'ephemeral'})
                 except Exception as failure:
                     error = failure
                 pins = json.loads(deploy.PINS.read_text()) if deploy.PINS.exists() else None
@@ -115,6 +116,25 @@ class DeploymentSafetyTests(unittest.TestCase):
         self.assertEqual(pins['services']['sub2api']['image'], 'old/sub2api')
         self.assertEqual(pins['services']['newapi']['image'],
                          'ghcr.io/moziaverse/mozia-tokenpower@' + DIGEST)
+
+    def test_sub2api_deploy_preserves_tokenpower_pin(self):
+        starts, error, pins = self.exercise_deployment(key='sub2api')
+        self.assertIsNone(error)
+        self.assertEqual(starts, [('ghcr.io/moziaverse/mozia-sub2api@' + DIGEST, 'sub2api')])
+        self.assertEqual(pins['services']['newapi']['image'], 'old/newapi')
+
+    def test_both_health_checks_use_the_renamed_gateway(self):
+        for service, container in [('newapi', 'mozia-tokenpower-1'), ('sub2api', 'mozia-sub2api-1')]:
+            with self.subTest(service=service), \
+                    patch.object(deploy, 'inspect', return_value={
+                        'Image': 'expected', 'State': {'Health': {'Status': 'healthy'}}
+                    }) as inspect, patch.object(deploy, 'run') as run:
+                deploy.check_health(service, 'expected')
+                inspect.assert_called_once_with(container)
+                run.assert_called_once_with([
+                    'docker', 'exec', 'mozia-tokenpower-1', 'wget', '-q', '-T', '10',
+                    '-O', '/dev/null', 'http://sub2api:8080/health'
+                ], timeout=20)
 
     def test_result_write_failure_restores_image_without_committing_new_pins(self):
         starts, error, pins = self.exercise_deployment(record_failure=True)

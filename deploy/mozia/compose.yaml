@@ -11,6 +11,7 @@ x-common: &common
 services:
   newapi:
     <<: *common
+    container_name: mozia-tokenpower-1
     image: ${NEWAPI_IMAGE:?Set the image built from the mozia commit}
     build:
       context: ../..

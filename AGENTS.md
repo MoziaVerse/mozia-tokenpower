@@ -2,6 +2,11 @@
 
 DO NOT send optional commentary
 
+## Local Conventions
+
+- 读取并遵守本仓库根目录的 `AGENTS.LOCAL.md`（如果存在）。
+- 遇到约定冲突时，明确指出冲突并向用户确认，不自行选择或覆盖。
+
 ## Overview
 
 This is an AI API gateway/proxy built with Go. It aggregates 40+ upstream AI providers (OpenAI, Claude, Gemini, Azure, AWS Bedrock, etc.) behind a unified API, with user management, billing, rate limiting, and an admin dashboard.

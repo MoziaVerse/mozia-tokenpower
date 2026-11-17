@@ -1,6 +1,7 @@
 name: CI
 
 on:
+  workflow_call:
   pull_request:
     types: [opened, synchronize, closed]
 
@@ -14,6 +15,14 @@ concurrency:
 # Checkout the event commit in both jobs. A PR merge ref can disappear while
 # queued runs start, and a base branch can advance after the merge event.
 jobs:
+  deployment:
+    name: Deployment guards
+    if: github.event.action != 'closed' || github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+      - run: python3 -m unittest discover -s deploy -p '*_test.py'
+
   backend:
     name: Backend vet, build, and test
     if: github.event.action != 'closed' || github.event.pull_request.merged == true

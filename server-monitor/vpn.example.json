@@ -1,0 +1,25 @@
+{
+  "name": "Halo UniVPN",
+  "host": "TokenPower 新加坡 2",
+  "timezone": "Asia/Shanghai",
+  "interval": 10,
+  "failures_to_alert": 2,
+  "timeout": 8,
+  "checks": [
+    {"type": "systemd", "unit": "halo-univpn.service"},
+    {"type": "http", "url": "http://192.168.92.222/", "method": "HEAD", "expected_status": "any"}
+  ],
+  "recovery": {
+    "enabled": true,
+    "strategy": "halo_univpn",
+    "unit": "halo-univpn.service",
+    "cooldown": 90,
+    "backoff_step": 30,
+    "max_cooldown": 390
+  },
+  "feishu": {
+    "webhook_env": "FEISHU_WEBHOOK",
+    "secret_env": "FEISHU_SECRET",
+    "timeout": 10
+  }
+}

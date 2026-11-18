@@ -1,0 +1,21 @@
+[Unit]
+Description=Server monitor (%i) with Feishu alerts
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+EnvironmentFile=-/opt/mozia/secrets/server-monitor.env
+EnvironmentFile=-/opt/mozia/secrets/server-monitor-%i.env
+ExecStart=/usr/bin/python3 -u /opt/mozia/mozia-tokenpower/server-monitor/server_monitor.py --config /opt/mozia/secrets/server-monitor-%i.json
+Restart=always
+RestartSec=10
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

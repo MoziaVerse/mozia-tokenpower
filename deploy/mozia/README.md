@@ -106,6 +106,19 @@ with their commits, then update `NEWAPI_IMAGE`, `SUB2API_IMAGE` and
 Keep the previous images and take database backups before an upgrade.
 Database migrations may prevent an image-only downgrade.
 
+## Host VPN reconnect
+
+The host VPN reconnect script is maintained here, not in the generic server monitor.
+Install `reconnect.py` as root at `/opt/mozia/univpn/reconnect.py` (0700) and
+`halo-univpn-reconnect.conf` as `/etc/systemd/system/halo-univpn.service.d/reconnect.conf`
+(0644). Run `systemctl daemon-reload`; the existing VPN session can stay up.
+On its next start the service selects the exact `UNIVPN_PROFILE` from the vendor's
+saved connection list. Renaming a connection requires renaming its `.ini` under
+`/root/UniVPN/config/` and updating the corresponding `ProfileName` filename in
+`/root/UniVPN/sysconfig.ini`. Back up both first; never commit either file or the
+VPN credential file. `UNIVPN_PROFILE=<name> python3 reconnect.py --check-menu`
+checks a captured vendor menu on stdin without reading credentials or connecting.
+
 ## Backup
 
 Use `backup.sh` before upgrades. It writes PostgreSQL custom-format dumps and

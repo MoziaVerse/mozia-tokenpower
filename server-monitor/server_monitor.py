@@ -9,11 +9,13 @@ import json
 import math
 import os
 import re
+import signal
 import socket
 import subprocess
 import time
 import urllib.parse
 from datetime import datetime
+from typing import NamedTuple
 from zoneinfo import ZoneInfo
 
 
@@ -62,10 +64,10 @@ def load_config(path):
         if not isinstance(check, dict) or not isinstance(check.get("type"), str) or check["type"] not in CHECKS:
             raise ValueError("Unknown check type")
         if check["type"] == "systemd":
-            fields(check, "type unit")
+            fields(check, "type unit on_failure")
             unit_name(check.get("unit"))
         else:
-            fields(check, "type url method expected_status")
+            fields(check, "type url method expected_status on_failure")
             parse_url(check.get("url"), ("http", "https"))
             check.setdefault("method", "GET")
             check.setdefault("expected_status", [200])
@@ -75,14 +77,16 @@ def load_config(path):
             if statuses != "any" and (not isinstance(statuses, list) or not statuses or
                     any(type(s) is not int or not 100 <= s <= 599 for s in statuses)):
                 raise ValueError("expected_status must be HTTP status codes or 'any'")
+        if check.setdefault("on_failure", "recover") not in ("alert", "recover"):
+            raise ValueError("on_failure must be alert or recover")
     recovery = config.get("recovery", {})
-    fields(recovery, "enabled strategy unit cooldown backoff_step max_cooldown")
+    fields(recovery, "enabled strategy unit cooldown backoff_step max_cooldown reminder_interval")
     recovery = {"enabled": False, "strategy": "systemd", "cooldown": 90,
-                "backoff_step": 30, "max_cooldown": 390, **recovery}
+                "backoff_step": 30, "max_cooldown": 390, "reminder_interval": 900, **recovery}
     if (type(recovery["enabled"]) is not bool or not isinstance(recovery["strategy"], str)
-            or recovery["strategy"] not in RECOVERIES):
+            or recovery["strategy"] not in ("systemd", "halo_univpn")):
         raise ValueError("Invalid recovery enabled flag or strategy")
-    for key in ("cooldown", "backoff_step", "max_cooldown"):
+    for key in ("cooldown", "backoff_step", "max_cooldown", "reminder_interval"):
         positive(recovery[key])
     if recovery["max_cooldown"] < recovery["cooldown"]:
         raise ValueError("max_cooldown must not be less than cooldown")
@@ -91,9 +95,7 @@ def load_config(path):
     if recovery["enabled"] and recovery["strategy"] == "halo_univpn" and recovery["unit"] not in (
             "halo-univpn", "halo-univpn.service"):
         raise ValueError("halo_univpn recovery only supports halo-univpn.service")
-    if recovery["enabled"] and recovery["strategy"] == "systemd" and recovery["unit"] in (
-            "halo-univpn", "halo-univpn.service"):
-        raise ValueError("Use halo_univpn recovery to preserve authentication rejection protection")
+    recovery["legacy_exit_guard"] = "78" if recovery["strategy"] == "halo_univpn" else None
     config["recovery"] = recovery
     feishu = config.get("feishu", {})
     fields(feishu, "webhook webhook_env secret_env timeout")
@@ -137,7 +139,13 @@ def check_http(check, timeout):
 CHECKS = {"systemd": check_systemd, "http": check_http}
 
 
+class Failure(NamedTuple):
+    reason: str
+    check: dict
+
+
 def check_health(config):
+    alert = None
     for index, check in enumerate(config["checks"], 1):
         try:
             reason = CHECKS[check["type"]](check, config["timeout"])
@@ -145,30 +153,50 @@ def check_health(config):
             # Do not leak URLs, credentials, command output or response bodies.
             reason = f"{check['type']} 检测失败 ({type(error).__name__})"
         if reason:
-            return f"检查 {index}: {reason}"
-    return None
+            failure = Failure(f"检查 {index}: {reason}", check)
+            if not config["recovery"]["enabled"] or check["on_failure"] == "recover":
+                return failure
+            if alert is None:
+                alert = failure
+    return alert
 
 
-def restart_systemd(recovery, timeout):
+def restart_systemd(recovery, timeout, failed_check):
     unit = recovery["unit"]
-    for args in (("reset-failed",), ("restart", "--no-block")):
-        result = systemctl(unit, *args, timeout=timeout)
-        if result.returncode:
-            raise RuntimeError("systemctl recovery command failed")
-    return True
-
-
-def restart_halo_univpn(recovery, timeout):
-    # Fail closed if status cannot be read. Exit 78 requires human intervention.
-    result = systemctl(recovery["unit"], "show", "-p", "ExecMainStatus", "--value", timeout=timeout)
-    if result.returncode or not result.stdout.strip().isdigit():
-        raise RuntimeError("Cannot read VPN exit status")
-    if result.stdout.strip() == "78":
-        return False
-    return restart_systemd(recovery, timeout)
-
-
-RECOVERIES = {"systemd": restart_systemd, "halo_univpn": restart_halo_univpn}
+    keys = "LoadState ActiveState SubState Job Result ExecMainCode ExecMainStatus RestartPreventExitStatus".split()
+    result = systemctl(unit, "show", "--all", "-p", ",".join(keys), timeout=timeout)
+    state = dict(line.split("=", 1) for line in result.stdout.splitlines() if "=" in line)
+    if result.returncode or not set(keys).issubset(state) or state["LoadState"] != "loaded":
+        raise RuntimeError("无法读取目标服务的 systemd 状态，未请求重启")
+    if state["Result"] == "start-limit-hit":
+        return "blocked", "已触发 systemd 启动限流，请人工检查"
+    active = state["ActiveState"]
+    if (state["Job"] or state["SubState"].startswith("auto-restart") or
+            active in ("activating", "deactivating", "reloading", "refreshing", "maintenance")):
+        return "waiting", "systemd 正在处理目标服务，监控未重复请求重启"
+    code, status = state["ExecMainCode"], state["ExecMainStatus"]
+    if (active not in ("active", "inactive", "failed") or not state["SubState"] or not state["Result"]
+            or code not in ("0", "1", "2", "3") or not re.fullmatch(r"[0-9]{1,3}", status)
+            or int(status) > 255 or (code == "0" and status != "0")):
+        raise RuntimeError("无法识别目标服务的 systemd 状态，未请求重启")
+    prevented = state["RestartPreventExitStatus"].split()
+    if code == "1" and (status in prevented or status == recovery["legacy_exit_guard"]):
+        return "blocked", f"服务退出码 {status} 禁止重启，请人工检查"
+    for name in prevented:
+        if re.fullmatch(r"[0-9]{1,3}", name) and int(name) <= 255:
+            continue
+        number = getattr(signal, "SIG" + name.removeprefix("SIG"), None)
+        if not isinstance(number, signal.Signals):
+            raise RuntimeError("无法识别禁止重启的退出策略，未请求重启")
+        if code in ("2", "3") and int(status) == number:
+            return "blocked", f"服务因信号 {name} 退出且禁止重启，请人工检查"
+    if (active == "active" and failed_check["type"] == "systemd" and
+            failed_check["unit"].removesuffix(".service") == unit.removesuffix(".service")):
+        return "waiting", "目标服务已启动，等待下一轮健康检查"
+    result = systemctl(unit, "restart", "--no-block", "--job-mode=fail", timeout=timeout)
+    if result.returncode:
+        raise RuntimeError("systemd 未接受重启请求")
+    return "requested", "systemd 已接受重启请求，等待健康检查确认"
 
 
 def sign(timestamp, secret):
@@ -216,42 +244,76 @@ class Monitor:
     """Incident state is independent of probes, recovery strategies and delivery."""
     def __init__(self, config, notify):
         self.config, self.notify = config, notify
-        self.failures = self.attempts = 0
+        self.reset_incident()
+
+    def reset_incident(self):
+        self.failures = self.recoverable_failures = self.attempts = 0
         self.down_at = self.first_failure = None
         self.next_restart = 0
+        self.retry_delay = self.config["recovery"]["cooldown"]
+        self.verify_at = None
+        self.next_reminder = 0
+        self.last_action = ""
         self.blocked = False
 
-    def tick(self, reason, now):
-        if reason is None:
+    def try_recovery(self, check, now):
+        recovery = self.config["recovery"]
+        try:
+            outcome, self.last_action = restart_systemd(recovery, self.config["timeout"], check)
+        except (OSError, subprocess.SubprocessError, RuntimeError) as error:
+            outcome = "error"
+            self.last_action = (str(error) if isinstance(error, RuntimeError)
+                                else f"systemctl 操作未确认 ({type(error).__name__})")
+            print(f"Recovery failed: {self.last_action}", flush=True)
+        if outcome == "blocked":
+            self.blocked = True
+            return
+        if outcome == "requested":
+            self.attempts += 1
+        if outcome in ("requested", "error"):
+            self.next_restart = now + self.retry_delay
+            self.retry_delay = min(recovery["max_cooldown"], self.retry_delay + recovery["backoff_step"])
+        if outcome == "error":
+            self.verify_at = now
+        elif self.verify_at is None:
+            self.verify_at = now + recovery["cooldown"]
+
+    def tick(self, failure, now):
+        if failure is None:
             if self.down_at is not None:
                 self.notify("服务已恢复", "green", [("中断时长", f"{int(now - self.down_at)} 秒"),
-                            ("恢复尝试次数", str(self.attempts))])
-            self.failures = self.attempts = 0
-            self.down_at = self.first_failure = None
-            self.next_restart = 0
-            self.blocked = False
+                            ("已提交重启次数", str(self.attempts))])
+            self.reset_incident()
             return
         self.failures += 1
+        recoverable = self.config["recovery"]["enabled"] and failure.check["on_failure"] == "recover"
+        self.recoverable_failures = self.recoverable_failures + 1 if recoverable else 0
         if self.first_failure is None:
             self.first_failure = now
-        if self.failures < self.config["failures_to_alert"]:
+        threshold = self.config["failures_to_alert"]
+        if self.failures < threshold or self.blocked:
             return
         recovery = self.config["recovery"]
+        title, color = None, "red"
         if self.down_at is None:
             self.down_at = self.first_failure
-            self.notify("服务异常", "red", [("检测结果", reason),
-                        ("处理", "尝试自动恢复" if recovery["enabled"] else "仅告警，不重启")])
-        if not recovery["enabled"] or self.blocked or now < self.next_restart:
-            return
-        self.attempts += 1
-        self.next_restart = now + min(recovery["max_cooldown"],
-                                      recovery["cooldown"] + recovery["backoff_step"] * (self.attempts - 1))
-        try:
-            if not RECOVERIES[recovery["strategy"]](recovery, self.config["timeout"]):
-                self.blocked = True
-                self.notify("自动恢复已暂停", "orange", [("说明", "VPN 登录被拒绝或需要验证码；请人工处理。检测恢复正常前不会再次自动重启。")])
-        except (OSError, subprocess.SubprocessError, RuntimeError) as error:
-            print(f"Recovery failed ({type(error).__name__}); retry after cooldown", flush=True)
+            title = "服务异常"
+        action = "仅告警，不重启"
+        if self.recoverable_failures >= threshold:
+            if now >= self.next_restart:
+                self.try_recovery(failure.check, now)
+            action = self.last_action
+        elif recoverable:
+            action = "等待可触发重启的检查连续失败"
+        if self.blocked:
+            title, color = "自动恢复已暂停", "orange"
+        elif (self.verify_at is not None and now >= self.verify_at
+                and now >= self.next_reminder and (recoverable or self.attempts)):
+            title, color = "自动恢复仍未成功", "orange"
+            self.next_reminder = now + recovery["reminder_interval"]
+        if title:
+            self.notify(title, color, [("检测结果", failure.reason), ("处理", action),
+                        ("已提交重启次数", str(self.attempts)), ("中断时长", f"{int(now - self.down_at)} 秒")])
 
 
 def main():
@@ -270,14 +332,15 @@ def main():
     except (OSError, ValueError, KeyError) as error:
         parser.exit(2, f"Invalid configuration or missing notification credentials ({type(error).__name__})\n")
     if args.test_notify:
-        notifier("服务监控测试", "blue", [("当前检测", check_health(config) or "正常")])
+        failure = check_health(config)
+        notifier("服务监控测试", "blue", [("当前检测", failure.reason if failure else "正常")])
         return
     monitor = Monitor(config, notifier)
     print(f"Watching {config['name']}", flush=True)
     # ponytail: state is process-local; persist incidents if restart-spanning history is needed.
     while True:
-        reason = check_health(config)
-        monitor.tick(reason, time.monotonic())
+        failure = check_health(config)
+        monitor.tick(failure, time.monotonic())
         time.sleep(config["interval"])
 
 

@@ -11,11 +11,12 @@
   ],
   "recovery": {
     "enabled": true,
-    "strategy": "halo_univpn",
+    "strategy": "systemd",
     "unit": "halo-univpn.service",
     "cooldown": 90,
     "backoff_step": 30,
-    "max_cooldown": 390
+    "max_cooldown": 390,
+    "reminder_interval": 900
   },
   "feishu": {
     "webhook_env": "FEISHU_WEBHOOK",

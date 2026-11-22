@@ -1,4 +1,5 @@
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -20,18 +21,28 @@ class ProfileSelectionTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 78 if expected is None else 0)
                 self.assertEqual(result.stdout.strip(), expected or "")
 
-    def test_missing_profile_or_rejected_authentication_stops_retries(self):
+    def test_login_retries_ambiguous_failures_but_stops_for_explicit_auth_challenges(self):
         menu = "<Connection Name List>\n7:demo\n-----\n"
-        for name, sends in (("missing", []), ("demo", ["7", "1", "demo-user", "demo-pass"])):
+        for name, output, expected in (("missing", "", 78), ("demo", "Login failed\nWelcome to UniVPN!", 78),
+                ("demo", "Authentication failed: connection timed out", 78), ("demo", "Login failed: invalid password", 77),
+                ("demo", "Account is locked", 77), ("demo", "Please enter the verification code: ", 77)):
             client = Mock(after=menu)
-            client.expect.side_effect = [0, 1]
             vendor = Mock(spawn=Mock(return_value=client), TIMEOUT=TimeoutError, EOF=EOFError)
-            with self.subTest(name=name), patch.dict(sys.modules, pexpect=vendor), \
+
+            def expect(patterns):
+                if patterns is reconnect.PROFILE_LIST:
+                    return 0
+                return next((index for index, pattern in enumerate(patterns) if isinstance(pattern, str)
+                             and re.search(pattern, output)), patterns.index(vendor.EOF))
+
+            client.expect.side_effect = expect
+            with self.subTest(name=name, output=output), patch.dict(sys.modules, pexpect=vendor), \
                     patch.dict(os.environ, UNIVPN_PROFILE=name), patch.object(sys, "argv", ["reconnect.py"]), \
                     patch.object(os, "open", return_value=10), patch.object(os, "fstat", return_value=Mock(st_mode=0o100600, st_uid=0)), \
                     patch.object(os, "fdopen", mock_open(read_data='{"username":"demo-user","password":"demo-pass"}')), \
                     patch.object(reconnect.signal, "signal"), patch("builtins.print") as log:
-                self.assertEqual(reconnect.main(), 78)
+                self.assertEqual(reconnect.main(), expected)
+                sends = ["7", "1", "demo-user", "demo-pass"] if name == "demo" else []
                 self.assertEqual(client.sendline.call_args_list, [call(value) for value in sends])
                 self.assertNotIn("demo-pass", str(log.call_args_list))
                 client.close.assert_called_once_with(force=True)

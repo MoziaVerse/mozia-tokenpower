@@ -72,9 +72,15 @@ def main():
         child.sendline(credentials["username"])
         child.expect_exact("Please input the login user password")
         child.sendline(credentials["password"])
-        result = child.expect(["Successful login", r"(?i)(login fail|auth.*fail|incorrect|invalid password|locked|verification code)"])
+        result = child.expect(["Successful login",
+                               r"(?i)\b(?:(?:invalid|incorrect|wrong|bad) (?:password|credentials|user ?name)"
+                               r"|password (?:is )?(?:invalid|incorrect|wrong|expired)|locked|verification code|one.time password|OTP)\b",
+                               "Welcome to UniVPN!", pexpect.EOF, pexpect.TIMEOUT])
+        if result == 1:
+            print("VPN credentials or interactive verification require attention; automatic login paused", flush=True)
+            return 77
         if result != 0:
-            print("VPN authentication rejected or requires interactive verification; automatic retry stopped", flush=True)
+            print("VPN login did not complete; systemd will retry", flush=True)
             return 78
         child.expect_exact("Succeeded in enabling network extension")
         connected = True

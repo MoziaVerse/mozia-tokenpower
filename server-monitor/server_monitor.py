@@ -95,7 +95,6 @@ def load_config(path):
     if recovery["enabled"] and recovery["strategy"] == "halo_univpn" and recovery["unit"] not in (
             "halo-univpn", "halo-univpn.service"):
         raise ValueError("halo_univpn recovery only supports halo-univpn.service")
-    recovery["legacy_exit_guard"] = "78" if recovery["strategy"] == "halo_univpn" else None
     config["recovery"] = recovery
     feishu = config.get("feishu", {})
     fields(feishu, "webhook webhook_env secret_env timeout")
@@ -180,7 +179,7 @@ def restart_systemd(recovery, timeout, failed_check):
             or int(status) > 255 or (code == "0" and status != "0")):
         raise RuntimeError("无法识别目标服务的 systemd 状态，未请求重启")
     prevented = state["RestartPreventExitStatus"].split()
-    if code == "1" and (status in prevented or status == recovery["legacy_exit_guard"]):
+    if code == "1" and status in prevented:
         return "blocked", f"服务退出码 {status} 禁止重启，请人工检查"
     for name in prevented:
         if re.fullmatch(r"[0-9]{1,3}", name) and int(name) <= 255:

@@ -30,7 +30,7 @@ Python 3.9+ 标准库实现，无第三方依赖。一个配置对应一个 syst
   - `http`：支持 HTTP/HTTPS，验证 TLS；`method` 为 `GET`（默认）或 `HEAD`；`expected_status` 默认 `[200]`，也可显式设为 `"any"`，仅判断连通性。不会跟随重定向，也不会读取响应正文。`"any"` 适用于 VPN 隧道，不适用于业务健康判断。
 - `recovery`：省略时默认禁用。`enabled` 必须为布尔值，`unit` 是明确授权重启的本机 systemd **服务**。
   - `strategy: "systemd"`（默认）：有待处理作业或服务正在切换状态时等待，不重复重启；状态读不清时不重启。命中 `start-limit-hit` 或服务自己的 `RestartPreventExitStatus`（退出码或信号）时，通知人工处理并暂停到所有检查通过，不执行 `reset-failed`。
-  - Halo 的 unit 应声明 `RestartPreventExitStatus=78`，通用策略据此判断，其他服务的 78 没有特殊含义。旧配置的 `strategy: "halo_univpn"` 无须迁移，仍额外保留 78 保护。
+  - Halo VPN 遇到 `78` 会在三分钟后重试；明确的凭据错误、账号锁定或验证码提示使用 `77` 暂停自动登录。旧策略名 `halo_univpn` 和 `systemd` 都遵循单元配置，不额外拦截 `78`。旧版监控请改用 `systemd` 策略并重启对应的监控实例。
   - `cooldown` 默认 90 秒，`backoff_step` 默认 30 秒，`max_cooldown` 默认 390 秒。已提交重启或命令出错后，按 90、120、150 秒递增至上限再试；冷却期间继续检测。只有 systemd 已接受的监控重启请求计入次数，提交并不等于恢复成功。
   - `reminder_interval` 默认 900 秒，独立于重试间隔。首次读状态或请求重启失败立即通知；请求已接受或 systemd 在自行恢复时，先给一个 `cooldown` 的观察期，仍不健康才提醒。之后同一事故最多每 15 分钟提醒一次（可按实例调整）。人工介入和确认恢复立即通知，不受提醒节流影响。首次处置就失败或暂停时，用对应通知代替首条异常通知，不连发两条。
 - `feishu`：每个配置可独立选择机器人。`webhook` 可直接填 HTTPS 地址；推荐改用 `webhook_env` 指向环境变量，默认 `FEISHU_WEBHOOK`。签名密钥只能通过 `secret_env` 指定环境变量，默认 `FEISHU_SECRET`，必须配置；`timeout` 默认 10 秒。机器人须开启签名校验。真实 webhook、密钥和配置不提交 Git。

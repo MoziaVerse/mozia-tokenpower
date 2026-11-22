@@ -112,6 +112,11 @@ The host VPN reconnect script is maintained here, not in the generic server moni
 Install `reconnect.py` as root at `/opt/mozia/univpn/reconnect.py` (0700) and
 `halo-univpn-reconnect.conf` as `/etc/systemd/system/halo-univpn.service.d/reconnect.conf`
 (0644). Run `systemctl daemon-reload`; the existing VPN session can stay up.
+Failed starts, including exit 78 (incomplete login or configuration error), retry
+after three minutes. This stays below the host's five-starts-per-ten-minutes limit.
+Explicit credential errors, account locks, and verification challenges exit 77
+and require operator attention. The monitor honors the same unit policy; on an
+older monitor, select the `systemd` strategy and restart only the VPN monitor.
 On its next start the service selects the exact `UNIVPN_PROFILE` from the vendor's
 saved connection list. Renaming a connection requires renaming its `.ini` under
 `/root/UniVPN/config/` and updating the corresponding `ProfileName` filename in

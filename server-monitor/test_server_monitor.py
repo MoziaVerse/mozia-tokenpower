@@ -93,16 +93,19 @@ class ServerMonitorTests(unittest.TestCase):
                 self.assertEqual(notify.call_args.args[0], "服务已恢复")
                 self.assertIn(("已提交重启次数", "0"), notify.call_args.args[2])
 
-    def test_old_vpn_config_keeps_exit_guard_without_unit_policy(self):
+    def test_old_vpn_config_retries_78_unless_the_unit_prohibits_it(self):
         legacy = {"name": "vpn", "checks": [{"type": "systemd", "unit": "halo-univpn"}],
                   "recovery": {"enabled": True, "unit": "halo-univpn.service", "strategy": "halo_univpn"}}
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "config.json"
             path.write_text(json.dumps(legacy))
             config = monitor.load_config(path)
-        with patch.object(monitor, "systemctl", return_value=show_state(ExecMainStatus="78")) as command:
-            self.assertEqual(monitor.restart_systemd(config["recovery"], 8, config["checks"][0])[0], "blocked")
-            self.assertEqual(command.call_count, 1)
+        for status, prevented, outcome in (("78", "77", "requested"), ("77", "77", "blocked"), ("78", "78", "blocked")):
+            with self.subTest(status=status, prevented=prevented), patch.object(monitor, "systemctl", return_value=show_state(
+                    ExecMainStatus=status, RestartPreventExitStatus=prevented)) as command:
+                self.assertEqual(monitor.restart_systemd(config["recovery"], 8, config["checks"][0])[0], outcome)
+                self.assertEqual([call.args[1] for call in command.call_args_list],
+                                 ["show", "restart"] if outcome == "requested" else ["show"])
 
     def test_unreadable_status_and_command_failure_notify_without_counting_restarts(self):
         for result in (subprocess.CompletedProcess([], 1, ""), show_state(ExecMainStatus="invalid"),
